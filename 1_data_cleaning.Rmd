@@ -1,0 +1,104 @@
+---
+title: "Data Cleaning"
+output: pdf_document
+date: "2024-11-04"
+---
+
+Load all the data
+```{r}
+library(data.table)
+library(dplyr)
+#cost = 123.36 be 12.336, retail = 440 should be 44
+trnsact <- fread("trnsact_cleaned_storesku_merged.csv")
+skuinfo <- read.csv('skuinfo_cleaned.csv')
+skstinfo <- read.csv('skstinfo.csv')
+strinfo <- read.csv('strinfo_copy.csv')
+trnsact <- fread('trnsact.csv')
+strinfo <- strinfo[,-1]
+str_colums <- c('store', 'city', 'state', 'zip')
+colnames(strinfo) <- str_colums
+```
+
+Clean the trnsact
+
+```{r}
+
+colums <- c('sku', 'store', 'register', 'trannam', 'interid', 'saledate', 'saletype', 'quantity',
+            'orgprice','unknown','amount', 'seq', 'mic', 'unknown2')
+colnames(trnsact) = colums
+#47331389
+trnsact <- trnsact[(trnsact$orgprice != 0 & trnsact$amount != 0), ]
+trnsact_cleaned <- trnsact[trnsact$unknown == trnsact$amount, -c(10,14)]
+trnsact_cleaned <- trnsact_cleaned[trnsact_cleaned$store %in% unique(skstinfo$store), ]
+unique_trnsact_sku <- unique(trnsact_cleaned$sku)
+sku_in_skst_and_skuinfo<- unique_trnsact_sku[unique_trnsact_sku %in% unique(skuinfo$sku) & unique_trnsact_sku %in% unique(skstinfo$sku)]
+trnsact_cleaned_storesku <- trnsact_cleaned[trnsact_cleaned$sku %in% sku_in_skst_and_skuinfo, ]
+```
+
+#We then clean the sale date part
+```{r}
+trnsact_cleaned_storesku$sale_month <- format(as.Date(trnsact_cleaned_storesku$saledate), "%m")
+#Take a look at the distribution
+
+trnsact_cleaned_storesku$saledayofweek <-  weekdays(as.Date(trnsact_cleaned_storesku$saledate))
+trnsact_cleaned_storesku$saleday <- format(as.Date(trnsact_cleaned_storesku$saledate), "%d")
+table(trnsact_cleaned_storesku$saledayofweek)
+table(trnsact_cleaned_storesku$saleday)
+table(trnsact_cleaned_storesku$sale_month)
+#Clean the white space
+```
+
+#We combine it with store 
+
+```{r}
+#Clean the white space
+strinfo$city <- trimws(strinfo$city)
+#Merge strinfo and trnsact data by store
+trnsact_cleaned_storesku_merged <- merge(x = strinfo, y = trnsact_cleaned_storesku, by = c('store'))
+head(trnsact_cleaned_storesku_merged)
+#Option to write it
+#write.csv(trnsact_cleaned_storesku_merged, 'trnsact_cleaned_storesku_merged.csv')
+```
+
+#We then combine it product. We first clean 
+
+```{r}
+skstsku_cleaned <- skstinfo[skstinfo$sku %in% unique(skuinfo$sku) & skstinfo$sku %in% unique(trnsact_cleaned$sku),]
+skstsku_cleaned <- skstsku_cleaned[skstsku_cleaned$store %in% unique(strinfo$store) & skstsku_cleaned$store %in% unique(trnsact_cleaned$store),]
+```
+
+
+```{r}
+trnsact_skustore <- merge(x = trnsact_cleaned_storesku_merged[trnsact_cleaned_storesku_merged$store == 102,], y = skstsku_cleaned[skstsku_cleaned$store == 102,],
+                               by = c('store', 'sku'))
+count = 1
+for(i in unique(trnsact_cleaned_storesku_merged$store)[2:327]){
+  count = count+1
+  if(count%%10 == 0){
+    print(count)
+  }
+    
+  trnsact_skustore_temp <- merge(x = trnsact_cleaned_storesku_merged[trnsact_cleaned_storesku_merged$store == i,], y = skstsku_cleaned[skstsku_cleaned$store == i,], by = c('store', 'sku'))
+  trnsact_skustore <- trnsact_skustore %>%
+                      bind_rows(trnsact_skustore_temp)
+}
+summary(trnsact_skustore)
+
+```
+
+```{r}
+sku_cleaned = skuinfo[skuinfo$sku %in% unique(trnsact_skustore$sku),]
+sales_by_category <- trnsact_skustore %>%
+  left_join(sku_cleaned, by = "sku") %>%  # Merge with SKU data which contains dept info
+  group_by(dept) %>%                  	# Assuming 'dept' is the column name in sku_cleaned
+  summarise(total_sales = sum(amount, na.rm = TRUE)) %>%
+  arrange(desc(total_sales))           	# Arrange in descending order
+trnsact_final <- merge(trnsact_skustore, sku_cleaned[,c('sku', 'dept')], by = 'sku')
+
+
+summary(trnsact_final)
+write.csv(trnsact_final, 'trnsact_final.csv')
+write.csv(sales_by_category, 'sales_by_category.csv')
+```
+
+
